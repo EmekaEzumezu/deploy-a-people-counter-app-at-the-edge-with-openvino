@@ -44,7 +44,7 @@ class Network:
         self.infer_request = None
         self.async_infer_handler = None
 
-    def load_model(self):
+    def load_model(self, model, device="CPU", cpu_extension=None):
         ### TODO: Load the model ###
 
         # Initialize the plugin
@@ -88,19 +88,22 @@ class Network:
 
     def get_input_shape(self):
         ### TODO: Return the shape of the input layer ###
-        return
+        return self.network.inputs[self.input_blob].shape
 
-    def exec_net(self):
+    def exec_net(self, request_id, image):
         ### TODO: Start an asynchronous request ###
         ### TODO: Return any necessary information ###
         ### Note: You may need to update the function parameters. ###
-        return
+        self.async_infer_handler = self.net_plugin.start_async(
+            request_id=request_id, inputs={self.input_blob: image})
 
-    def wait(self):
+        return self.net_plugin
+
+    def wait(self, request_id):
         ### TODO: Wait for the request to be complete. ###
         ### TODO: Return any necessary information ###
         ### Note: You may need to update the function parameters. ###
-        return
+        return self.net_plugin.requests[request_id].wait(-1)
 
     def get_output(self):
         ### TODO: Extract and return the output results
