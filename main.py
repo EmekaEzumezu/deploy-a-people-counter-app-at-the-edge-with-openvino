@@ -92,7 +92,34 @@ def infer_on_stream(args, client):
 
     ### TODO: Load the model through `infer_network` ###
 
+    infer_network.load_model(model=args.model, 
+        device=args.device, 
+        cpu_extension=args.cpu_extension)
+    
+    net_input_shape = infer_network.get_input_shape()
+
     ### TODO: Handle the input stream ###
+
+    # Create a flag for single images
+    image_flag = False
+    # Check if the input is a webcam
+    if args.i == 'CAM':
+        args.i = 0
+    elif args.i.endswith('.jpg') or args.i.endswith('.bmp'):
+        image_flag = True
+
+    ### TODO: Get and open video capture
+    cap = cv2.VideoCapture(args.i)
+    cap.open(args.i)
+
+    # Create a video writer for the output video
+    if not image_flag:
+        # The second argument should be `cv2.VideoWriter_fourcc('M','J','P','G')`
+        # on Mac, and `0x00000021` on Linux
+        # 100x100 to match desired resizing
+        out = cv2.VideoWriter('out.mp4', 0x00000021, 30, (100,100))
+    else:
+        out = None
 
     ### TODO: Loop until stream is over ###
 
