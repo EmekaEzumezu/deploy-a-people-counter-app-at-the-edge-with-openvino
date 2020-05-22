@@ -46,11 +46,45 @@ class Network:
 
     def load_model(self):
         ### TODO: Load the model ###
+
+        # Initialize the plugin
+        self.plugin = IECore()
+
+        # Read the IR as a IENetwork
+        model_xml = model
+        model_bin = os.path.splitext(model_xml)[0] + ".bin"
+
+        self.network = IENetwork(model=model_xml, weights=model_bin)
+
+        # Load the IENetwork into the plugin
+        self.net_plugin = self.plugin.load_network(self.network, device)
+
         ### TODO: Check for supported layers ###
+
+        #get supported layers
+        supported_layers = self.plugin.query_network((self.network, device)
+
+        # Check for any unsupported layers, and let the user
+        #  know if anything is missing. Exit the program, if so.
+        unsupported_layers = [l for l in self.network.layers.keys() if l not in supported_layers]
+        if len(unsupported_layers) != 0:
+            print("Unsupported layers found: {}".format(unsupported_layers))
+            print("Check whether extensions are available to add to IECore.")
+            exit(1)
+
         ### TODO: Add any necessary extensions ###
+
+        # Add a CPU extension, if applicable
+        if cpu_extension and "CPU" in device:
+            self.plugin.add_extension(cpu_extension, device)
+
+        # Get the input layer
+        self.input_blob = next(iter(self.network.inputs))
+        self.output_blob = next(iter(self.network.outputs))
+
         ### TODO: Return the loaded inference plugin ###
         ### Note: You may need to update the function parameters. ###
-        return
+        return self.plugin
 
     def get_input_shape(self):
         ### TODO: Return the shape of the input layer ###
