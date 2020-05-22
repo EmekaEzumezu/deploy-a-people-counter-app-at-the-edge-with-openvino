@@ -61,8 +61,8 @@ class Network:
 
         ### TODO: Check for supported layers ###
 
-        #get supported layers
-        supported_layers = self.plugin.query_network((self.network, device)
+        # get supported layers
+        supported_layers = self.plugin.query_network(self.network, device)
 
         # Check for any unsupported layers, and let the user
         #  know if anything is missing. Exit the program, if so.
@@ -105,7 +105,10 @@ class Network:
         ### Note: You may need to update the function parameters. ###
         return self.net_plugin.requests[request_id].wait(-1)
 
-    def get_output(self):
+    def get_output(self, request_id, output=None):
         ### TODO: Extract and return the output results
         ### Note: You may need to update the function parameters. ###
-        return
+        if output:
+            return self.async_infer_handler.outputs[output]
+        else:
+            return self.net_plugin.requests[request_id].outputs[self.output_blob]
