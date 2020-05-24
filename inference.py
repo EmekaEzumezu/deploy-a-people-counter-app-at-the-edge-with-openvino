@@ -43,7 +43,6 @@ class Network:
         self.input_blob = None
         self.output_blob = None
         self.net_plugin = None
-        self.infer_request = None
         self.async_infer_handler = None
 
     def load_model(self, model, device, input_size, output_size, num_requests, cpu_extension=None, plugin=None):
