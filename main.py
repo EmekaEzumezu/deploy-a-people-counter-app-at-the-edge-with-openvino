@@ -40,11 +40,11 @@ MQTT_HOST = IPADDRESS
 MQTT_PORT = 3001
 MQTT_KEEPALIVE_INTERVAL = 60
 
-# NOTE: Some of the codes was gotten from https://github.com/intel-iot-devkit/people-counter-python
 
 def build_argparser():
     """
     Parse command line arguments.
+
     :return: command line arguments
     """
     parser = ArgumentParser()
@@ -65,14 +65,12 @@ def build_argparser():
     parser.add_argument("-pt", "--prob_threshold", type=float, default=0.5,
                         help="Probability threshold for detections filtering"
                         "(0.5 by default)")
-    parser.add_argument("-pc", "--perf_counts", type=str, default=False,
-                        help="Print performance counters")
     return parser
 
 
 def connect_mqtt():
     ### TODO: Connect to the MQTT client ###
-    client = mqtt.Client()
+    client = client = mqtt.Client()
     client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
 
     return client
@@ -87,26 +85,16 @@ def infer_on_stream(args, client):
     :param client: MQTT client
     :return: None
     """
-
-    args = build_argparser().parse_args()
-
-    # Flag for the input image
-    single_image_mode = False
-
-    cur_request_id = 0
-    last_count = 0
-    total_count = 0
-    start_time = 0
-
     # Initialise the class
     infer_network = Network()
     # Set Probability threshold for detections
-    #prob_threshold = args.prob_threshold
+    global prob_threshold
+    prob_threshold = args.prob_threshold
 
     ### TODO: Load the model through `infer_network` ###
-    # Load the network to IE plugin to get shape of input layer
-    n, c, h, w = infer_network.load_model(args.model, args.device, 1, 1,
-                                          cur_request_id, args.cpu_extension)[1]
+    infer_network.load_model(args.model, args.device, args.cpu_extension)
+    net_input_shape = infer_network.get_input_shape()
+    input_shape = net_input_shape['image_tensor']
 
     ### TODO: Handle the input stream ###
     # Checks for live feed
@@ -124,16 +112,37 @@ def infer_on_stream(args, client):
         assert os.path.isfile(args.input), "Specified input file doesn't exist"
 
     cap = cv2.VideoCapture(input_stream)
-
     if input_stream:
         cap.open(args.input)
 
     if not cap.isOpened():
         log.error("ERROR! Unable to open video source")
-    global initial_w, initial_h, prob_threshold
-    prob_threshold = args.prob_threshold
+
+    global initial_w, initial_h
+    #prob_threshold = args.prob_threshold
     initial_w = cap.get(3)
     initial_h = cap.get(4)
+
+    # Flag for the input image
+    single_image_mode = False
+
+    #iniatilize desired variables
+    global total_count, report, duration, net_output, frame, prev_counter, prev_duration, counter, dur
+    
+    total_count = 0
+    request_id=0
+    
+    report = 0
+
+
+    prev_counter = 0
+    prev_duration = 0
+    counter = 0
+    dur = 0
+
+
+    # NOTE: Some code implementation gotten from 
+    # https://github.com/prateeksawhney97/People-Counter-Application-Using-Intel-OpenVINO-Toolkit/blob/master/main.py
 
     ### TODO: Loop until stream is over ###
     while cap.isOpened():
@@ -145,35 +154,27 @@ def infer_on_stream(args, client):
         key_pressed = cv2.waitKey(60)
 
         ### TODO: Pre-process the image as needed ###
-        # Start async inference
-        image = cv2.resize(frame, (w, h))
-        # Change data layout from HWC to CHW
-        image = image.transpose((2, 0, 1))
-        image = image.reshape((n, c, h, w))
+        p_frame = cv2.resize(frame, (input_shape[3], input_shape[2]))
+        p_frame = p_frame.transpose((2,0,1))
+        p_frame = p_frame.reshape(1, *p_frame.shape)
 
         ### TODO: Start asynchronous inference for specified request ###
-        # Start asynchronous inference for specified request.
-        inf_start = time.time()
-        infer_network.exec_net(cur_request_id, image)
+        net_input = {'image_tensor': p_frame,'image_info': p_frame.shape[1:]}
+        duration = None
+        infer_network.exec_net(request_id, net_input)
 
         ### TODO: Wait for the result ###
-        # Wait for the result
-        if infer_network.wait(cur_request_id) == 0:
-            det_time = time.time() - inf_start
+        if infer_network.wait(request_id) == 0:
 
             ### TODO: Get the results of the inference request ###
-            # Results of the output layer of the network
-            result = infer_network.get_output(cur_request_id)
-            if args.perf_counts:
-                perf_count = infer_network.performance_counter(cur_request_id)
-                performance_counts(perf_count)
+            net_output = infer_network.get_output(request_id)
 
             ### TODO: Extract any desired stats from the results ###
-            frame, current_count = ssd_out(frame, result)
-            inf_time_message = "Inference time: {:.3f}ms"\
-                               .format(det_time * 1000)
-            cv2.putText(frame, inf_time_message, (15, 15),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.5, (200, 10, 10), 1)
+            #probs = net_output[0, 0, :, 2]
+
+            frame, net_output, prev_counter, prev_duration, counter, dur, report, total_count, duration = \
+            desired_stats(frame, net_output, prev_counter, 
+                prev_duration, counter, dur, report, total_count, duration)
 
             ### TODO: Calculate and send relevant information on ###
             ### current_count, total_count and duration to the MQTT server ###
@@ -181,72 +182,76 @@ def infer_on_stream(args, client):
             ### Topic "person/duration": key of "duration" ###
 
             # When new person enters the video
-            if current_count > last_count:
-                start_time = time.time()
-                total_count = total_count + current_count - last_count
-                client.publish("person", json.dumps({"total": total_count}))
+            client.publish('person',
+               json.dumps({
+                   'count': report, 'total': total_count}),
+               qos=0, retain=False)
 
             # Person duration in the video is calculated
-            if current_count < last_count:
-                duration = int(time.time() - start_time)
-                # Publish messages to the MQTT server
-                client.publish("person/duration",
-                               json.dumps({"duration": duration}))
+            if duration is not None:
+                client.publish('person/duration', 
+                    json.dumps({'duration': duration}), 
+                    qos=0, retain=False)
 
-            client.publish("person", json.dumps({"count": current_count}))
-            last_count = current_count
 
             if key_pressed == 27:
                 break
 
         ### TODO: Send the frame to the FFMPEG server ###
-        # Send frame to the ffmpeg server
-        sys.stdout.buffer.write(frame)  
+        frame = cv2.resize(frame, (768, 432))
+        sys.stdout.buffer.write(frame)
         sys.stdout.flush()
 
         ### TODO: Write an output image if `single_image_mode` ###
         if single_image_mode:
             cv2.imwrite('output_image.jpg', frame)
+
     cap.release()
     cv2.destroyAllWindows()
     client.disconnect()
     infer_network.clean()
 
-def performance_counts(perf_count):
-    """
-    print information about layers of the model.
-    :param perf_count: Dictionary consists of status of the layers.
-    :return: None
-    """
-    print("{:<70} {:<15} {:<15} {:<15} {:<10}".format('name', 'layer_type',
-                                                      'exec_type', 'status',
-                                                      'real_time, us'))
-    for layer, stats in perf_count.items():
-        print("{:<70} {:<15} {:<15} {:<15} {:<10}".format(layer,
-                                                          stats['layer_type'],
-                                                          stats['exec_type'],
-                                                          stats['status'],
-                                                          stats['real_time']))
+def desired_stats(frame, net_output, prev_counter, prev_duration, counter, dur, report, total_count, duration):
 
-def ssd_out(frame, result):
-    """
-    Parse SSD output.
-    :param frame: frame from camera/video
-    :param result: list contains the data to parse ssd
-    :return: person count and frame
-    """
-    current_count = 0
-    for obj in result[0][0]:
-        # Draw bounding box for object when it's probability is more than
-        #  the specified threshold
-        if obj[2] > prob_threshold:
-            xmin = int(obj[3] * initial_w)
-            ymin = int(obj[4] * initial_h)
-            xmax = int(obj[5] * initial_w)
-            ymax = int(obj[6] * initial_h)
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 55, 255), 1)
-            current_count = current_count + 1
-    return frame, current_count
+    # prev_counter = 0
+    # prev_duration = 0
+    pointer = 0
+    # counter = 0
+    # dur = 0
+    # report = 0
+    # total_count = 0
+    # duration = None
+
+    probs = net_output[0, 0, :, 2]
+
+    for i, p in enumerate(probs):
+        if p > prob_threshold:
+            pointer += 1
+            box = net_output[0, 0, i, 3:]
+            p1 = (int(box[0] * initial_w), int(box[1] * initial_h))
+            p2 = (int(box[2] * initial_w), int(box[3] * initial_h))
+            frame = cv2.rectangle(frame, p1, p2, (0, 255, 0), 3)
+
+    if pointer != counter:
+        prev_counter = counter
+        counter = pointer
+        if dur >= 3:
+            prev_duration = dur
+            dur = 0
+        else:
+            dur = prev_duration + dur
+            prev_duration = 0  # unknown, not needed in this case
+    else:
+        dur += 1
+        if dur >= 3:
+            report = counter
+            if dur == 3 and counter > prev_counter:
+                total_count += counter - prev_counter
+            elif dur == 3 and counter < prev_counter:
+                duration = int((prev_duration / 10.0) * 1000)
+
+    return frame, net_output, prev_counter, prev_duration, counter, dur, report, total_count, duration
+
 
 def main():
     """
@@ -264,4 +269,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    exit(0)
